@@ -9,6 +9,8 @@
 
 #define MAX_OPEN_FILES 20
 
+#define BLOCK_METADATA (sizeof(char) + 2*sizeof(int))
+
 #define CALL_BF(call)       \
 {                           \
   BF_ErrorCode code = call; \
@@ -25,11 +27,48 @@ typedef struct {
   int attrLength1;
   char attrType2;
   int attrLength2;
+  int root;
   int fd;
+  int dataSize;
+  int indexSize;
 } openAM;
 
 openAM* tableOfIndexes[MAX_OPEN_FILES]; 
 int openFiles = 0;
+
+
+// Calculate how many elements fit in a data(leaf) block.
+int howManyInDataBlock(openAM* currentAM) {
+  int keyPlusDataSize = currentAM->attrLength1 + currentAM->attrLength2;
+  int count = (BF_BLOCK_SIZE - BLOCK_METADATA) / keyPlusDataSize;
+  return count;
+}
+
+
+// Calculate how many elements fit in an index block.
+int howManyInIndexBlock(openAM* currentAM) {
+  int keyPlusPointerSize = currentAM->attrLength1 + sizeof(int);
+  int count = (BF_BLOCK_SIZE - BLOCK_METADATA) / keyPlusPointerSize;
+  return count;
+}
+
+int recursiveInsert(int currentBlock, void *value1, void *value2) {
+
+}
+
+int createIndexBlock(int fd, void* key, int block) {
+  //Initializations.
+  BF_Block *indexBlock;
+  BF_Block_Init(&indexBlock);
+  char* recordData;
+  CALL_BF(BF_AllocateBlock(fd, indexBlock));
+  recordData = BF_Block_GetData(indexBlock);
+
+  //Add "I" character in the first byte.
+
+  //Add counter set to 1. 
+}
+
 
 void AM_Init() {
   for(int i = 0; i < MAX_OPEN_FILES; i++) {
@@ -115,6 +154,9 @@ int AM_CreateIndex(char *fileName, char attrType1,
   strcpy(str1, "BP");
   memcpy(data, str1, 2);
 
+  //If root == 0, there is no root yet.
+  int root = 0;
+
   // Write attributes.
   char* dataPoint = data+2;
   memcpy(dataPoint, &attrType1, sizeof(char));
@@ -124,7 +166,9 @@ int AM_CreateIndex(char *fileName, char attrType1,
   memcpy(dataPoint, &attrType2, sizeof(char));
   dataPoint += sizeof(char);
   memcpy(dataPoint, &attrLength2, sizeof(int));
-  
+  dataPoint += sizeof(int);
+  memcpy(dataPoint, &root, sizeof(int));
+
   // Save changes to first block.
   BF_Block_SetDirty(block);
   CALL_BF(BF_UnpinBlock(block));
@@ -148,6 +192,7 @@ int AM_OpenIndex(char *fileName) {
 	int attrLength1;
   char attrType2;
   int attrLength2;
+  int root;
 
   // If we have reached max open files, return error.
   if(openFiles == MAX_OPEN_FILES) {
@@ -187,6 +232,8 @@ int AM_OpenIndex(char *fileName) {
   memcpy(&attrType2, dataPoint, sizeof(char));
   dataPoint += sizeof(char);
   memcpy(&attrLength2, dataPoint, sizeof(int));
+  dataPoint += sizeof(int);
+  memcpy(&root, dataPoint, sizeof(int));
   
 
   //Find first empty position in table of indexes and put the file descriptor.
@@ -198,7 +245,10 @@ int AM_OpenIndex(char *fileName) {
       tableOfIndexes[index]->attrType1 = attrType1;
       tableOfIndexes[index]->attrLength1 = attrLength1;
       tableOfIndexes[index]->attrType2 = attrType2;
-      tableOfIndexes[index]->attrLength2 = attrLength2;  
+      tableOfIndexes[index]->attrLength2 = attrLength2;
+      tableOfIndexes[index]->root = root;
+      tableOfIndexes[index]->indexSize = howManyInIndexBlock(tableOfIndexes[index]);
+      tableOfIndexes[index]->dataSize = howManyInDataBlock(tableOfIndexes[index]);
       break;
     }
     index++;
@@ -223,10 +273,17 @@ int AM_CloseIndex(int fileDesc) {
 
 
 int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
-  //If empty, create root and one leaf.
-  
+  openAM* currentAM = tableOfIndexes[fileDesc];
+  int fd = currentAM->fd;
 
+  //If empty, create root and one leaf.
+  if(currentAM->root == 0) {
+
+  }
   //Else, go through B+ tree.
+  else {
+
+  }
 
   return AME_OK;
 }
