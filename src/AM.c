@@ -52,8 +52,56 @@ int howManyInIndexBlock(openAM* currentAM) {
   return count;
 }
 
-int recursiveInsert(int currentBlock, void *value1, void *value2) {
 
+int keyCompare(openAM* bplus, void* value1, void* keyValue) {
+  
+}
+
+
+int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *value2) {
+  //Get current block.
+  BF_Block *currentBlock;
+  BF_Block_Init(&currentBlock);
+  CALL_BF(BF_GetBlock(bplus->fd, currentBlockNum, currentBlock));
+  char* data = BF_Block_GetData(currentBlock);
+  char* dataPoint = data;
+  int sizeOfIndexElements = bplus->attrLength1 + sizeof(int);
+  int count;
+
+  // If index block:
+  if(data[0] == 'I') {
+    dataPoint += sizeof(char);
+    memcpy(&count, dataPoint, sizeof(int));
+    dataPoint += sizeof(int);
+    int visited = 0;
+    int nextBlockNum;
+    int insertResult;
+    //Go to each element and if keyCompare returns negative, go to left pointer.
+    for(int i = 0; i < count; i++) {
+      if(keyCompare(bplus, value1, (void*)(dataPoint+sizeof(int))) < 0) {
+        memcpy(&nextBlockNum, dataPoint, sizeof(int)); //Left pointer.
+        insertResult = recursiveInsert(bplus, nextBlockNum, value1, value2);
+        visited = 1;
+      }
+      dataPoint += sizeOfIndexElements;
+    }
+    //If no pointer visited, go to last pointer. 
+    if(visited == 0) {
+      memcpy(&nextBlockNum, dataPoint, sizeof(int)); //Last pointer.
+      insertResult = recursiveInsert(bplus, nextBlockNum, value1, value2);
+    }
+
+    //Split happened.
+    if(insertResult != 0) {
+
+    }
+  }
+  //If leaf(data) block:
+  else {
+    //Find spot to put new item.
+    dataPoint += sizeof(char);
+    memcpy(&count, dataPoint, sizeof(int));
+  }
 }
 
 int createIndexBlock(int fd, void* key, int block) {
