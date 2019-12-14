@@ -152,7 +152,7 @@ int main() {
 			edname, ++recordid);
 
 	/* -----------------------------------------------------------------------------*/
-
+	
 	strcpy(ename, "PARAGWGOY MARIA");
 	eage = 30;
 	esal = 208.9;
@@ -177,6 +177,14 @@ int main() {
 	strcpy(edname, "TYRIA");
 	insertEntries(eNentry, eAentry, eSentry, eDentry, ename, eage, esal,
 			edname, ++recordid);
+
+	//TODO: remove later.
+	AM_printDataBlock(eNentry, 1);
+	AM_printDataBlock(eAentry, 1);
+	AM_printDataBlock(eSentry, 1);
+	AM_printDataBlock(eDentry, 1);
+	AM_Close();
+	return 0;
 
 	/* -----------------------------------------------------------------------------*/
 
