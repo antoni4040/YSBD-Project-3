@@ -77,6 +77,6 @@ void AM_PrintError(
 void AM_Close();
 
 
-int AM_printDataBlock(int fileDesc, int blockNum);
+int AM_printSudo(int fileDesc, int blockNum);
 
 #endif /* AM_H_ */

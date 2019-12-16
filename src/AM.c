@@ -87,7 +87,7 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
     dataPoint += sizeof(char);
     memcpy(&count, dataPoint, sizeof(int));
     dataPoint += sizeof(int);
-    int visited = 0;
+    int visited = -1;
     int nextBlockNum;
     int insertResult;
     //Go to each element and if keyCompare returns negative, go to left pointer.
@@ -95,19 +95,69 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
       if(keyCompare(bplus, value1, (void*)(dataPoint+sizeof(int))) < 0) {
         memcpy(&nextBlockNum, dataPoint, sizeof(int)); //Left pointer.
         insertResult = recursiveInsert(bplus, nextBlockNum, value1, value2, returnKey);
-        visited = 1;
+        visited = i;
+        break;
       }
       dataPoint += sizeOfIndexElements;
     }
     //If no pointer visited, go to last pointer. 
-    if(visited == 0) {
+    if(visited == -1) {
       memcpy(&nextBlockNum, dataPoint, sizeof(int)); //Last pointer.
       insertResult = recursiveInsert(bplus, nextBlockNum, value1, value2, returnKey);
     }
 
     //Split happened.
     if(insertResult != 0) {
+      //Index split necessary. The middle key goes only to the parent with returnKey.
+      if(bplus->indexSize == count) {
+        char* buffer = malloc((bplus->indexSize + 1)*sizeOfIndexElements);
+        char* bufferPoint = buffer;
+        //Copy all elements to buffer and add new one at the end.
+        if(visited == -1) {
+          memcpy(bufferPoint, data + sizeof(char) + sizeof(int), sizeOfIndexElements*count + sizeof(int));
+          bufferPoint += sizeOfIndexElements*count;
+          memcpy(bufferPoint, returnKey, bplus->attrLength1);
+          bufferPoint += bplus->attrLength1;
+          memcpy(bufferPoint, &insertResult, sizeof(int));
+        }
+        else {
+          memcpy(bufferPoint, data + sizeof(char) + sizeof(int), sizeof(int));
+          bufferPoint += sizeof(int);
+          memcpy(bufferPoint, data + sizeof(char) + 2*sizeof(int), sizeOfIndexElements*visited);
+          bufferPoint += sizeOfIndexElements*visited;
+          memcpy(bufferPoint, returnKey, bplus->attrLength1);
+          bufferPoint += bplus->attrLength1;
+          memcpy(bufferPoint, &insertResult, sizeof(int));
+          bufferPoint += sizeof(int);
+          char* restData = data + sizeof(char) + 2*sizeof(int) + sizeOfIndexElements*visited;
+          memcpy(bufferPoint, restData, sizeOfIndexElements*(count - visited));
+        }
 
+        int halfPoint = (count + 1) / 2;
+
+        //Copy first half of buffer to existing block.
+        memcpy(data+sizeof(char)+sizeof(int), buffer, halfPoint*sizeOfDataElements);
+        //Change original count.
+        memcpy(data+sizeof(char), &halfPoint, sizeof(int));
+      }
+      else {
+        if(visited == - 1) {
+          dataPoint += sizeof(int);
+          memcpy(dataPoint, returnKey, bplus->attrLength1);
+          dataPoint += bplus->attrLength1;
+          memcpy(dataPoint, &insertResult, sizeof(int));
+        }
+        else {
+          dataPoint += sizeof(int);
+          memmove(dataPoint+sizeOfIndexElements, dataPoint, (count - visited)*sizeOfIndexElements + sizeof(int));
+          memcpy(dataPoint, returnKey, bplus->attrLength1);
+          dataPoint += bplus->attrLength1;
+          memcpy(dataPoint, &insertResult, sizeof(int));
+        }
+
+        int newCount = count + 1;
+        memcpy(data+sizeof(char), &newCount, sizeof(int));
+      }
     }
     else 
       return 0;
@@ -129,7 +179,7 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
     //If split necessary.
     if(bplus->dataSize == count) {
       //Make buffer for data cause we lazy(but awesome).
-      char* buffer = malloc(sizeOfDataElements*(bplus->dataSize + 1));
+      char* buffer = malloc((bplus->dataSize + 1)*sizeOfDataElements);
       char* bufferPoint = buffer;
       //Copy all elements to buffer and add new one at the end.
       if(insertionPoint == -1) {
@@ -157,6 +207,13 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
       //Change original count.
       memcpy(data+sizeof(char), &halfPoint, sizeof(int));
 
+      //Setup first block pointer to second block.
+      int previousPointer;
+      memcpy(&previousPointer, data + BF_BLOCK_SIZE - sizeof(int), sizeof(int));
+      int numOfBlocks;
+      CALL_BF(BF_GetBlockCounter(bplus->fd, &numOfBlocks));
+      memcpy(data + BF_BLOCK_SIZE - sizeof(int), &numOfBlocks, sizeof(int));
+
       //Copy second half of buffer to new block.
       BF_Block *newBlock;
       BF_Block_Init(&newBlock);
@@ -164,6 +221,23 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
       char* newData = BF_Block_GetData(newBlock);
 
       //Setup new data block.
+      newData[0] = 'D';
+      char* newDataPoint = newData + sizeof(char);
+      int newCount = (count+1) - halfPoint;
+      memcpy(newDataPoint, &newCount, sizeof(int));
+      newDataPoint += sizeof(int);
+      memcpy(newDataPoint, buffer + halfPoint*sizeOfDataElements,
+        newCount*sizeOfDataElements);
+
+      //Setup second block pointer to first block's previous pointer.
+      memcpy(newData + BF_BLOCK_SIZE - sizeof(int), &previousPointer, sizeof(int));
+      memcpy(returnKey, newDataPoint, bplus->attrLength1);
+
+      BF_Block_SetDirty(newBlock);
+      CALL_BF(BF_UnpinBlock(newBlock));
+      BF_Block_Destroy(&newBlock);
+
+      return numOfBlocks;
 
       free(buffer);
     }
@@ -186,8 +260,14 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
         int newCount = count + 1;
         memcpy(data+sizeof(char), &newCount, sizeof(int));
       }
+
+      return 0;
     }
   }
+
+  BF_Block_SetDirty(currentBlock);
+  CALL_BF(BF_UnpinBlock(currentBlock));
+  BF_Block_Destroy(&currentBlock);
 }
 
 
@@ -427,67 +507,148 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
   }
   //Else, go through B+ tree.
   else {
-    void* returnKey = NULL;
-    recursiveInsert(bplus, bplus->root, value1, value2, returnKey);
-    if(returnKey != NULL) {
-      free(returnKey);
+    void* returnKey = malloc(bplus->attrLength1);
+    int newBlock = recursiveInsert(bplus, bplus->root, value1, value2, returnKey);
+    if(newBlock != 0) {
+      BF_Block *indexBlock;
+      BF_Block_Init(&indexBlock);
+      char* recordData;
+      CALL_BF(BF_AllocateBlock(bplus->fd, indexBlock));
+      recordData = BF_Block_GetData(indexBlock);
+
+      recordData[0] = 'I';
+      char* recordDataPoint = recordData + sizeof(char);
+
+      int count = 1;
+      memcpy(recordDataPoint, &count, sizeof(int));
+
+      recordDataPoint += sizeof(int);
+      memcpy(recordDataPoint, &bplus->root, sizeof(int));
+      recordDataPoint += sizeof(int);
+      memcpy(recordDataPoint, returnKey, bplus->attrLength1);
+      recordDataPoint += bplus->attrLength1;
+      memcpy(recordDataPoint, &newBlock, sizeof(int));
+
+      int newRootBlock;
+      CALL_BF(BF_GetBlockCounter(bplus->fd, &newRootBlock));
+      newRootBlock--;
+      bplus->root = newRootBlock;
     }
+    free(returnKey);
   }
   return AME_OK;
 }
 
-int AM_printDataBlock(int fileDesc, int blockNum) {
+int AM_printSudo(int fileDesc, int blockNum) {
   openAM* bplus = tableOfIndexes[fileDesc];
   int fd = bplus->fd;
 
-  BF_Block *dataBlock;
-  BF_Block_Init(&dataBlock);
-  CALL_BF(BF_GetBlock(fd, blockNum, dataBlock));
-  char* recordData = BF_Block_GetData(dataBlock);
+  if(blockNum == -1)
+    blockNum = bplus->root;
 
-  int count;
-  memcpy(&count, recordData+sizeof(char), sizeof(int));
-  char* recordDataPoint = recordData + sizeof(char) + sizeof(int);
-  for(int i = 0; i < count; i++) {
-    if(bplus->attrType1 == 'i') {
-      int key;
-      memcpy(&key, recordDataPoint, sizeof(int));
-      printf("Key: %d\n", key);
-    }
-    else if(bplus->attrType1 == 'f') {
-      float key;
-      memcpy(&key, recordDataPoint, sizeof(float));
-      printf("Key: %f\n", key);
-    }
-    else {
-      char key[255];
-      memcpy(&key, recordDataPoint, bplus->attrLength1);
-      printf("Key: %s\n", key);
-    }
 
-    recordDataPoint += bplus->attrLength1;
+  BF_Block *block;
+  BF_Block_Init(&block);
+  CALL_BF(BF_GetBlock(fd, blockNum, block));
+  char* recordData = BF_Block_GetData(block);
 
-    if(bplus->attrType2 == 'i') {
-      int value;
-      memcpy(&value, recordDataPoint, sizeof(int));
-      printf("Value: %d\n", value);
-    }
-    else if(bplus->attrType2 == 'f') {
-      float value;
-      memcpy(&value, recordDataPoint, sizeof(float));
-      printf("Value: %f\n", value);
-    }
-    else {
-      char value[255];
-      memcpy(&value, recordDataPoint, bplus->attrLength2);
-      printf("Value: %s\n", value);
-    }
+  if(recordData[0] == 'I') {
+    printf("\n\nINDEX BLOCK:\n");
 
-    recordDataPoint += bplus->attrLength2;
+    printf("\nPrinting block number: %d\n", blockNum);
+    int count;
+    memcpy(&count, recordData+sizeof(char), sizeof(int));
+    char* recordDataPoint = recordData + sizeof(char) + sizeof(int);
+    int pos;
+
+    for(int i = 0; i < count; i++) {
+      memcpy(&pos, recordDataPoint, sizeof(int));
+      printf("P: %d\t", pos);
+
+      recordDataPoint += sizeof(int);
+
+      if(bplus->attrType1 == 'i') {
+        int key;
+        memcpy(&key, recordDataPoint, sizeof(int));
+        printf("Key: %d\t", key);
+      }
+      else if(bplus->attrType1 == 'f') {
+        float key;
+        memcpy(&key, recordDataPoint, sizeof(float));
+        printf("Key: %f\t", key);
+      }
+      else {
+        char key[255];
+        memcpy(&key, recordDataPoint, bplus->attrLength1);
+        printf("Key: %s\t", key);
+      }
+
+      recordDataPoint += bplus->attrLength1;
+    }
+    memcpy(&pos, recordDataPoint, sizeof(int));
+    printf("P: %d\n", pos);
+
+
+    recordDataPoint = recordData + sizeof(char) + sizeof(int);
+    for(int i = 0; i < count; i++) {
+      memcpy(&pos, recordDataPoint, sizeof(int));
+      recordDataPoint += sizeof(int);
+      recordDataPoint += bplus->attrLength1;
+      AM_printSudo(fileDesc, pos);
+    }
+    memcpy(&pos, recordDataPoint, sizeof(int));
+    AM_printSudo(fileDesc, pos);
+  }
+  else {
+    printf("\n\nDATA BLOCK:\n");
+
+    printf("\nPrinting block number: %d\n", blockNum);
+
+    int count;
+    memcpy(&count, recordData+sizeof(char), sizeof(int));
+    char* recordDataPoint = recordData + sizeof(char) + sizeof(int);
+    for(int i = 0; i < count; i++) {
+      if(bplus->attrType1 == 'i') {
+        int key;
+        memcpy(&key, recordDataPoint, sizeof(int));
+        printf("Key: %d\n", key);
+      }
+      else if(bplus->attrType1 == 'f') {
+        float key;
+        memcpy(&key, recordDataPoint, sizeof(float));
+        printf("Key: %f\n", key);
+      }
+      else {
+        char key[255];
+        memcpy(&key, recordDataPoint, bplus->attrLength1);
+        printf("Key: %s\n", key);
+      }
+
+      recordDataPoint += bplus->attrLength1;
+
+      if(bplus->attrType2 == 'i') {
+        int value;
+        memcpy(&value, recordDataPoint, sizeof(int));
+        printf("Value: %d\n", value);
+      }
+      else if(bplus->attrType2 == 'f') {
+        float value;
+        memcpy(&value, recordDataPoint, sizeof(float));
+        printf("Value: %f\n", value);
+      }
+      else {
+        char value[255];
+        memcpy(&value, recordDataPoint, bplus->attrLength2);
+        printf("Value: %s\n", value);
+      }
+
+      recordDataPoint += bplus->attrLength2;
+    }
   }
 
-  CALL_BF(BF_UnpinBlock(dataBlock));
-  BF_Block_Destroy(&dataBlock);
+  CALL_BF(BF_UnpinBlock(block));
+  BF_Block_Destroy(&block);
+  
 
   return AME_OK;
 }

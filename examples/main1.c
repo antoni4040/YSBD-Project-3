@@ -178,14 +178,6 @@ int main() {
 	insertEntries(eNentry, eAentry, eSentry, eDentry, ename, eage, esal,
 			edname, ++recordid);
 
-	//TODO: remove later.
-	AM_printDataBlock(eNentry, 1);
-	AM_printDataBlock(eAentry, 1);
-	AM_printDataBlock(eSentry, 1);
-	AM_printDataBlock(eDentry, 1);
-	AM_Close();
-	return 0;
-
 	/* -----------------------------------------------------------------------------*/
 
 	strcpy(ename, "KYRIAKIDHS GRHGORIOS");
@@ -274,6 +266,7 @@ int main() {
 	strcpy(edname, "FROUTA");
 	insertEntries(eNentry, eAentry, eSentry, eDentry, ename, eage, esal,
 			edname, ++recordid);
+
 
 	/* -----------------------------------------------------------------------------*/
 
@@ -429,6 +422,14 @@ int main() {
 			edname, ++recordid);
 
 	/* -----------------------------------------------------------------------------*/
+
+	//TODO: remove later.
+	AM_printSudo(eNentry, -1);
+	AM_printSudo(eAentry, -1);
+	AM_printSudo(eSentry, -1);
+	AM_printSudo(eDentry, -1);
+	AM_Close();
+	return 0;
 
 	strcpy(ename, "BELIBASSAKH AIMILIA");
 	eage = 44;
