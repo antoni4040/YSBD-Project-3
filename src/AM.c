@@ -1,6 +1,6 @@
 #include "AM.h"
 
-#include "bf.h" //HOW TF DO YOU FORGET THAT?
+#include "bf.h"
 #include "defn.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,7 +80,7 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
   char* dataPoint = data;
   int sizeOfIndexElements = bplus->attrLength1 + sizeof(int);
   int sizeOfDataElements = bplus->attrLength1 + bplus->attrLength2;
-  int count;
+  int count = 0;
 
   //If index block:
   if(data[0] == 'I') {
@@ -108,14 +108,15 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
 
     //Split happened.
     if(insertResult != 0) {
+      printf("Bplus index size:%d Count: %d\n", bplus->indexSize, count);
       //Index split necessary. The middle key goes only to the parent with returnKey.
       if(bplus->indexSize == count) {
-        char* buffer = malloc((bplus->indexSize + 1)*sizeOfIndexElements);
+        char* buffer = (char*)malloc((bplus->indexSize + 1)*sizeOfIndexElements + sizeof(int));
         char* bufferPoint = buffer;
         //Copy all elements to buffer and add new one at the end.
         if(visited == -1) {
           memcpy(bufferPoint, data + sizeof(char) + sizeof(int), sizeOfIndexElements*count + sizeof(int));
-          bufferPoint += sizeOfIndexElements*count;
+          bufferPoint += sizeOfIndexElements*count + sizeof(int);
           memcpy(bufferPoint, returnKey, bplus->attrLength1);
           bufferPoint += bplus->attrLength1;
           memcpy(bufferPoint, &insertResult, sizeof(int));
@@ -129,16 +130,47 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
           bufferPoint += bplus->attrLength1;
           memcpy(bufferPoint, &insertResult, sizeof(int));
           bufferPoint += sizeof(int);
-          char* restData = data + sizeof(char) + 2*sizeof(int) + sizeOfIndexElements*visited;
+          char* restData = data;
+          restData += sizeof(char) + 2*sizeof(int) + sizeOfIndexElements*visited;
           memcpy(bufferPoint, restData, sizeOfIndexElements*(count - visited));
         }
 
         int halfPoint = (count + 1) / 2;
 
         //Copy first half of buffer to existing block.
-        memcpy(data+sizeof(char)+sizeof(int), buffer, halfPoint*sizeOfDataElements);
+        memcpy(data+sizeof(char)+2*sizeof(int), buffer, halfPoint*sizeOfIndexElements);
         //Change original count.
         memcpy(data+sizeof(char), &halfPoint, sizeof(int));
+
+        //Copy middle key one level up the recursion.
+        bufferPoint = buffer;
+        bufferPoint += halfPoint*sizeOfIndexElements;
+        memcpy(returnKey, bufferPoint, bplus->attrLength1);
+        bufferPoint += bplus->attrLength1;
+
+        int numOfBlocks;
+        CALL_BF(BF_GetBlockCounter(bplus->fd, &numOfBlocks));
+
+        BF_Block *newBlock;
+        BF_Block_Init(&newBlock);
+        CALL_BF(BF_AllocateBlock(bplus->fd, newBlock));
+        char* newData = BF_Block_GetData(newBlock);
+
+        newData[0] = 'I';
+        memcpy(newData+sizeof(char)+sizeof(int), bufferPoint, (count - halfPoint)*sizeOfIndexElements + sizeof(int));
+        int newCount = count - halfPoint;
+        memcpy(newData+sizeof(char), &newCount, sizeof(int));
+
+        BF_Block_SetDirty(currentBlock);
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+
+        BF_Block_SetDirty(newBlock);
+        CALL_BF(BF_UnpinBlock(newBlock));
+        BF_Block_Destroy(&newBlock);
+
+        free(buffer);
+        return numOfBlocks;
       }
       else {
         if(visited == - 1) {
@@ -149,7 +181,7 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
         }
         else {
           dataPoint += sizeof(int);
-          memmove(dataPoint+sizeOfIndexElements, dataPoint, (count - visited)*sizeOfIndexElements + sizeof(int));
+          memmove(dataPoint+sizeOfIndexElements, dataPoint, (count - visited)*sizeOfIndexElements);
           memcpy(dataPoint, returnKey, bplus->attrLength1);
           dataPoint += bplus->attrLength1;
           memcpy(dataPoint, &insertResult, sizeof(int));
@@ -157,10 +189,19 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
 
         int newCount = count + 1;
         memcpy(data+sizeof(char), &newCount, sizeof(int));
+
+        BF_Block_SetDirty(currentBlock);
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 0;
       }
     }
-    else 
+    else {
+      BF_Block_SetDirty(currentBlock);
+      CALL_BF(BF_UnpinBlock(currentBlock));
+      BF_Block_Destroy(&currentBlock);
       return 0;
+    }
   }
   //If leaf(data) block:
   else {
@@ -233,13 +274,16 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
       memcpy(newData + BF_BLOCK_SIZE - sizeof(int), &previousPointer, sizeof(int));
       memcpy(returnKey, newDataPoint, bplus->attrLength1);
 
+      BF_Block_SetDirty(currentBlock);
+      CALL_BF(BF_UnpinBlock(currentBlock));
+      BF_Block_Destroy(&currentBlock);
+
       BF_Block_SetDirty(newBlock);
       CALL_BF(BF_UnpinBlock(newBlock));
       BF_Block_Destroy(&newBlock);
 
-      return numOfBlocks;
-
       free(buffer);
+      return numOfBlocks;
     }
     else {
       //Insert at last position.
@@ -261,13 +305,13 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
         memcpy(data+sizeof(char), &newCount, sizeof(int));
       }
 
+      BF_Block_SetDirty(currentBlock);
+      CALL_BF(BF_UnpinBlock(currentBlock));
+      BF_Block_Destroy(&currentBlock);
+
       return 0;
     }
   }
-
-  BF_Block_SetDirty(currentBlock);
-  CALL_BF(BF_UnpinBlock(currentBlock));
-  BF_Block_Destroy(&currentBlock);
 }
 
 
@@ -533,6 +577,10 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
       CALL_BF(BF_GetBlockCounter(bplus->fd, &newRootBlock));
       newRootBlock--;
       bplus->root = newRootBlock;
+
+      BF_Block_SetDirty(indexBlock);
+      CALL_BF(BF_UnpinBlock(indexBlock));
+      BF_Block_Destroy(&indexBlock);
     }
     free(returnKey);
   }

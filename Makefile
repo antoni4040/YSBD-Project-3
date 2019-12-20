@@ -10,6 +10,10 @@ main3:
 	@echo " Compile main3 ...";
 	gcc -I ./include/ -L ./lib/ -Wl,-rpath,./lib/ ./examples/main3.c ./src/AM.c -lbf -o ./build/main3
 
+main4:
+	@echo " Compile main4 ...";
+	gcc -g -I ./include/ -L ./lib/ -Wl,-rpath,./lib/ ./examples/main4.c ./src/AM.c -lbf -o ./build/main4
+
 bf:
 	@echo " Compile bf_main ...";
 	gcc -I ./include/ -L ./lib/ -Wl,-rpath,./lib/ ./examples/bf_main.c -lbf -o ./build/runner -O2

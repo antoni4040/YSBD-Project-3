@@ -144,6 +144,7 @@ int main() {
 	/* -----------------------------------------------------------------------------*/
 	recordid = 0;
 
+	for(int time = 0; time < 2; time++) {
 	strcpy(ename, "XRHSTOFORIDHS ANTWNHS");
 	eage = 25;
 	esal = 155.5;
@@ -439,7 +440,6 @@ int main() {
 	strcpy(edname, "PSWMIA");
 	insertEntries(eNentry, eAentry, eSentry, eDentry, ename, eage, esal,
 			edname, ++recordid);
-	
 
 	/* -----------------------------------------------------------------------------*/
 
@@ -1042,7 +1042,7 @@ int main() {
 	strcpy(edname, "FROUTA");
 	insertEntries(eNentry, eAentry, eSentry, eDentry, ename, eage, esal,
 			edname, ++recordid);
-
+	}
 	//TODO: remove later.
 	AM_printSudo(eNentry, -1);
 	AM_printSudo(eAentry, -1);
