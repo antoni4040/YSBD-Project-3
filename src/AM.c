@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #define MAX_OPEN_FILES 20
+#define MAXSCANS 20
 
 #define BLOCK_METADATA (sizeof(char) + 2*sizeof(int))
 
@@ -33,8 +34,20 @@ typedef struct {
   int indexSize;
 } openAM;
 
+typedef struct {
+  int openAM;
+  int blockNumber;
+  int positionInBlock;
+  int operation;
+  void* key;
+  void* value;
+} scan;
+
 openAM* tableOfIndexes[MAX_OPEN_FILES]; 
+scan*  tableOfScans[MAXSCANS];
+
 int openFiles = 0;
+int openScans = 0;
 
 
 // Calculate how many elements fit in a data(leaf) block.
@@ -108,7 +121,6 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
 
     //Split happened.
     if(insertResult != 0) {
-      printf("Bplus index size:%d Count: %d\n", bplus->indexSize, count);
       //Index split necessary. The middle key goes only to the parent with returnKey.
       if(bplus->indexSize == count) {
         char* buffer = (char*)malloc((bplus->indexSize + 1)*sizeOfIndexElements + sizeof(int));
@@ -138,13 +150,13 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
         int halfPoint = (count + 1) / 2;
 
         //Copy first half of buffer to existing block.
-        memcpy(data+sizeof(char)+2*sizeof(int), buffer, halfPoint*sizeOfIndexElements);
+        memcpy(data+sizeof(char)+2*sizeof(int), buffer+sizeof(int), halfPoint*sizeOfIndexElements);
         //Change original count.
         memcpy(data+sizeof(char), &halfPoint, sizeof(int));
 
         //Copy middle key one level up the recursion.
         bufferPoint = buffer;
-        bufferPoint += halfPoint*sizeOfIndexElements;
+        bufferPoint += sizeof(int)+halfPoint*sizeOfIndexElements;
         memcpy(returnKey, bufferPoint, bplus->attrLength1);
         bufferPoint += bplus->attrLength1;
 
@@ -314,10 +326,169 @@ int recursiveInsert(openAM* bplus, int currentBlockNum, void *value1, void *valu
   }
 }
 
+int recurseSearchFirst(openAM* bplus, void* key, int block) {
+  BF_Block *currentBlock;
+  BF_Block_Init(&currentBlock);
+  CALL_BF(BF_GetBlock(bplus->fd, block, currentBlock));
+  char* data = BF_Block_GetData(currentBlock);
+  int count;
+  memcpy(&count, data+sizeof(char), sizeof(int));
+  
+  if(data[0] == 'I') {
+    data += sizeof(char) + sizeof(int);
+    int nextBlockNum;
+
+    for(int i = 0; i < count; i++) {
+      if(keyCompare(bplus, key, (void*)(data+sizeof(int))) < 0) {
+        memcpy(&nextBlockNum, data, sizeof(int)); //Left pointer.
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return recurseSearchFirst(bplus, key, nextBlockNum);
+      }
+      data += bplus->attrLength1 + sizeof(int);
+    }
+
+    memcpy(&nextBlockNum, data, sizeof(int));
+    CALL_BF(BF_UnpinBlock(currentBlock));
+    BF_Block_Destroy(&currentBlock);
+    return recurseSearchFirst(bplus, key, nextBlockNum);
+  }
+  else {
+    CALL_BF(BF_UnpinBlock(currentBlock));
+    BF_Block_Destroy(&currentBlock);
+    return block;
+  }
+}
+
+// If something found return 0, else 1.
+int findNext(int position, int block, openAM* bplus, scan* currentScan) {
+  BF_Block *currentBlock;
+  BF_Block_Init(&currentBlock);
+  CALL_BF(BF_GetBlock(bplus->fd, block, currentBlock));
+  char* data = BF_Block_GetData(currentBlock);
+  char* dataPoint;
+  int count;
+  memcpy(&count, data+sizeof(char), sizeof(int));
+
+  dataPoint = data + sizeof(char) + sizeof(int);
+
+  position++;
+
+  dataPoint += position * (bplus->attrLength1 + bplus->attrLength2);
+
+  while(position < count) {
+    int compareResult = keyCompare(bplus, (void*)dataPoint, currentScan->key);
+
+    if(currentScan->operation == LESS_THAN) {
+      if(compareResult < 0) {
+        currentScan->blockNumber = block;
+        currentScan->positionInBlock = position;
+        currentScan->value = malloc(bplus->attrLength2);
+        memcpy(currentScan->value, dataPoint+bplus->attrLength1, bplus->attrLength2);
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 0;
+      }
+      else {
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 1;
+      }
+    }
+
+    else if(currentScan->operation == LESS_THAN_OR_EQUAL) {
+      if(compareResult <= 0) {
+        currentScan->blockNumber = block;
+        currentScan->positionInBlock = position;
+        currentScan->value = malloc(bplus->attrLength2);
+        memcpy(currentScan->value, dataPoint+bplus->attrLength1, bplus->attrLength2);
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 0;
+      }
+      else {
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 1;
+      }
+    }
+
+    else if(currentScan->operation == EQUAL) {
+      if(compareResult == 0) {
+        currentScan->blockNumber = block;
+        currentScan->positionInBlock = position;
+        currentScan->value = malloc(bplus->attrLength2);
+        memcpy(currentScan->value, dataPoint+bplus->attrLength1, bplus->attrLength2);
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 0;
+      }
+      else if(compareResult > 0){
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 1;
+      }
+    }
+
+    else if(currentScan->operation == GREATER_THAN) {
+      if(compareResult > 0) {
+        currentScan->blockNumber = block;
+        currentScan->positionInBlock = position;
+        currentScan->value = malloc(bplus->attrLength2);
+        memcpy(currentScan->value, dataPoint+bplus->attrLength1, bplus->attrLength2);
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 0;
+      }
+    }
+
+    else if(currentScan->operation == GREATER_THAN_OR_EQUAL) {
+      if(compareResult >= 0) {
+        currentScan->blockNumber = block;
+        currentScan->positionInBlock = position;
+        currentScan->value = malloc(bplus->attrLength2);
+        memcpy(currentScan->value, dataPoint+bplus->attrLength1, bplus->attrLength2);
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 0;
+      }
+    }
+
+    else {
+      if(compareResult != 0) {
+        currentScan->blockNumber = block;
+        currentScan->positionInBlock = position;
+        currentScan->value = malloc(bplus->attrLength2);
+        memcpy(currentScan->value, dataPoint+bplus->attrLength1, bplus->attrLength2);
+        CALL_BF(BF_UnpinBlock(currentBlock));
+        BF_Block_Destroy(&currentBlock);
+        return 0;
+      }
+    }
+    dataPoint += bplus->attrLength1 + bplus->attrLength2;
+    position++;
+  }
+
+  int nextBlockNum;
+  memcpy(&nextBlockNum, data+BF_BLOCK_SIZE-sizeof(int), sizeof(int));
+  if(nextBlockNum != -1) {
+    CALL_BF(BF_UnpinBlock(currentBlock));
+    BF_Block_Destroy(&currentBlock);
+    return findNext(-1, nextBlockNum, bplus, currentScan);
+  }
+  else {
+    CALL_BF(BF_UnpinBlock(currentBlock));
+    BF_Block_Destroy(&currentBlock);
+    return 1;
+  }
+}
 
 void AM_Init() {
   for(int i = 0; i < MAX_OPEN_FILES; i++) {
       tableOfIndexes[i] = NULL;
+  }
+  for(int i = 0; i < MAXSCANS; i++) {
+      tableOfScans[i] = NULL;
   }
   BF_Init(LRU);
 	return;
@@ -547,7 +718,19 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
     CALL_BF(BF_UnpinBlock(dataBlock));
     BF_Block_Destroy(&dataBlock);
 
+    BF_Block *firstBlock;
+    BF_Block_Init(&firstBlock);
+    char* firstData;
+    CALL_BF(BF_GetBlock(bplus->fd, 0, firstBlock));
+    firstData = BF_Block_GetData(firstBlock);
+    firstData += 2 + 2*(sizeof(char) + sizeof(int));
+
     bplus->root = 1;
+
+    memcpy(firstData, &bplus->root, sizeof(int));
+    BF_Block_SetDirty(firstBlock);
+    CALL_BF(BF_UnpinBlock(firstBlock));
+    BF_Block_Destroy(&firstBlock);
   }
   //Else, go through B+ tree.
   else {
@@ -576,7 +759,20 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
       int newRootBlock;
       CALL_BF(BF_GetBlockCounter(bplus->fd, &newRootBlock));
       newRootBlock--;
+      
+      BF_Block *firstBlock;
+      BF_Block_Init(&firstBlock);
+      char* firstData;
+      CALL_BF(BF_GetBlock(bplus->fd, 0, firstBlock));
+      firstData = BF_Block_GetData(firstBlock);
+      firstData += 2 + 2*(sizeof(char) + sizeof(int));
+
       bplus->root = newRootBlock;
+
+      memcpy(firstData, &bplus->root, sizeof(int));
+      BF_Block_SetDirty(firstBlock);
+      CALL_BF(BF_UnpinBlock(firstBlock));
+      BF_Block_Destroy(&firstBlock);
 
       BF_Block_SetDirty(indexBlock);
       CALL_BF(BF_UnpinBlock(indexBlock));
@@ -703,22 +899,82 @@ int AM_printSudo(int fileDesc, int blockNum) {
 
 
 int AM_OpenIndexScan(int fileDesc, int op, void *value) {
-  return AME_OK;
+  // If we have reached max open scans, return error.
+  if(openScans == MAX_OPEN_FILES) {
+    fprintf(stderr, "Can't open more scans.\n");
+    AM_errno = AME_MAX_SCANS;
+    return AM_errno;
+  }
+
+  //Find first empty position in table of open scans.
+  int index = 0;
+  while(index < MAXSCANS) {
+    if(tableOfScans[index] == NULL) {
+      tableOfScans[index] = malloc(sizeof(scan));
+      tableOfScans[index]->openAM = fileDesc;
+      tableOfScans[index]->operation = op;
+      tableOfScans[index]->blockNumber = -1;
+      tableOfScans[index]->positionInBlock = -1;
+      tableOfScans[index]->value = NULL;
+      tableOfScans[index]->key = malloc(tableOfIndexes[fileDesc]->attrLength1);
+      memcpy(tableOfScans[index]->key, value, tableOfIndexes[fileDesc]->attrLength1);
+      break;
+    }
+    index++;
+  }
+  openScans++;
+
+  int firstBlock;
+
+  if(op == LESS_THAN || op == LESS_THAN_OR_EQUAL || op == NOT_EQUAL)
+    firstBlock = 1;
+  else
+    firstBlock = recurseSearchFirst(tableOfIndexes[fileDesc], value, tableOfIndexes[fileDesc]->root);
+
+  tableOfScans[index]->blockNumber = firstBlock;
+  return index;
 }
 
 
 void *AM_FindNextEntry(int scanDesc) {
-	
+  scan* currentScan = tableOfScans[scanDesc];
+  openAM* bplus = tableOfIndexes[currentScan->openAM];
+	int found = findNext(currentScan->positionInBlock, currentScan->blockNumber, bplus, currentScan);
+  if(found == 0) {
+    return currentScan->value;
+  }
+
+  AM_errno = AME_EOF;
+  return NULL;
 }
 
 
 int AM_CloseIndexScan(int scanDesc) {
+  if(tableOfScans[scanDesc]->value != NULL) {
+    free(tableOfScans[scanDesc]->value);
+  }
+  free(tableOfScans[scanDesc]->key);
+  free(tableOfScans[scanDesc]);
+  tableOfScans[scanDesc] = NULL;
+  openScans--;
   return AME_OK;
 }
 
 
 void AM_PrintError(char *errString) {
-  
+  printf("%s\n", errString);
+  if(AM_errno == AME_EOF)
+    printf("AM_EOF\n");
+  else if(AM_errno == AME_PARAMETER)
+    printf("AME_PARAMETER\n");
+  else if(AM_errno == AME_EXISTS)
+    printf("AME_EXISTS\n");
+  else if(AM_errno == AME_MAX_FILES)
+    printf("AME_MAX_FILES\n");
+  else if(AM_errno == AME_NOT_BP)
+    printf("AME_NOT_BP\n");
+  else if(AM_errno == AME_MAX_SCANS)
+    printf("AME_MAX_SCANS\n");
 }
 
 void AM_Close() {

@@ -144,7 +144,7 @@ int main() {
 	/* -----------------------------------------------------------------------------*/
 	recordid = 0;
 
-	for(int time = 0; time < 2; time++) {
+	for(int time = 0; time < 10; time++) {
 	strcpy(ename, "XRHSTOFORIDHS ANTWNHS");
 	eage = 25;
 	esal = 155.5;

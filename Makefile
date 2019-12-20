@@ -1,6 +1,6 @@
 main1:
 	@echo " Compile main1 ...";
-	gcc -I ./include/ -L ./lib/ -Wl,-rpath,./lib/ ./examples/main1.c ./src/AM.c -lbf -o ./build/main1
+	gcc -g -I ./include/ -L ./lib/ -Wl,-rpath,./lib/ ./examples/main1.c ./src/AM.c -lbf -o ./build/main1
 
 main2:
 	@echo " Compile main2 ...";

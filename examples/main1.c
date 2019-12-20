@@ -1043,13 +1043,10 @@ int main() {
 	insertEntries(eNentry, eAentry, eSentry, eDentry, ename, eage, esal,
 			edname, ++recordid);
 
-	//TODO: remove later.
-	AM_printSudo(eNentry, -1);
+	// AM_printSudo(eNentry, -1);
 	AM_printSudo(eAentry, -1);
-	AM_printSudo(eSentry, -1);
-	AM_printSudo(eDentry, -1);
-	AM_Close();
-	return 0;
+	// AM_printSudo(eSentry, -1);
+	// AM_printSudo(eDentry, -1);
 
 	/* -----------------------------------------------------------------------------*/
 
@@ -1124,6 +1121,7 @@ int main() {
 		AM_PrintError(errStr);
 	}
 
+
 	/********************************************************************************
 	 *      Επερώτηση #2                                                            *
 	 *  Εύρεση των ονομάτων των υπαλλήλων με μισθό μικρότερο από 398.100            *
@@ -1171,6 +1169,10 @@ int main() {
 		sprintf(errStr, "Error in AM_CloseIndex called on %s \n", empSal);
 		AM_PrintError(errStr);
 	}
+
+	// //TODO: remove later.
+	// AM_Close();
+	// return 0;
 
 	/********************************************************************************
 	 *      Επερώτηση #3                                                            *

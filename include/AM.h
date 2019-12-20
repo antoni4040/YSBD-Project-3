@@ -11,6 +11,7 @@ extern int AM_errno;
 #define AME_EXISTS -3 //B+ File exists.
 #define AME_MAX_FILES -4 //Max files opened reached.
 #define AME_NOT_BP -5 //Opened file not B+ File.
+#define AME_MAX_SCANS -6 //Max opened scans reached.
 
 #define EQUAL 1
 #define NOT_EQUAL 2
